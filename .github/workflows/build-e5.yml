@@ -32,20 +32,38 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
           build_dir=build/ARM_E5
+          config="$build_dir/gem5.build/config"
           selected="RUBY_PROTOCOL_${E5_PROTOCOL}"
 
           scons defconfig "$build_dir" build_opts/ARM
 
-          # Desactivar cualquier otro protocolo que venga de ARM por defecto.
+          # Desactivar los demás protocolos habilitados por la configuración ARM.
           mapfile -t disable < <(
-              sed -nE 's/^(RUBY_PROTOCOL_[A-Za-z0-9_]+)=y$/\1=n/p' \
-                  "$build_dir/gem5.build/config" |
-              awk -v selected="$selected" '$0 != selected "=n"'
+            awk -F= -v selected="$selected" '
+              $1 ~ /^RUBY_PROTOCOL_[A-Za-z0-9_]+$/ && $2 == "y" && $1 != selected {
+                print $1 "=n"
+              }
+            ' "$config"
           )
 
-          scons setconfig "$build_dir" "${disable[@]}" "${selected}=y"
-          grep -Fx "${selected}=y" "$build_dir/gem5.build/config"
+          # Ruby exige que PROTOCOL coincida con el protocolo habilitado.
+          scons setconfig "$build_dir" \
+            USE_MULTIPLE_PROTOCOLS=n \
+            "PROTOCOL=${E5_PROTOCOL}" \
+            "${disable[@]}" \
+            "${selected}=y"
+
+          grep -Fx "PROTOCOL=\"${E5_PROTOCOL}\"" "$config"
+
+          enabled=$(grep -E '^RUBY_PROTOCOL_[A-Za-z0-9_]+=y$' "$config" || true)
+          if [[ "$enabled" != "${selected}=y" ]]; then
+            printf 'Se esperaba solo %s=y. Protocolos activos:\n%s\n' \
+              "$selected" "${enabled:-ninguno}" >&2
+            exit 1
+          fi
+          printf 'Protocolo activo: %s\n' "$enabled"
 
           scons -j2 "$build_dir/gem5.opt"
 
