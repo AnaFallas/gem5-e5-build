@@ -1,0 +1,82 @@
+name: Compilar gem5 para E5
+
+on: workflow_dispatch
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Compilar ${{ matrix.protocol }}
+    runs-on: ubuntu-24.04
+    container: ghcr.io/gem5/ubuntu-22.04_all-dependencies:v26-0
+    timeout-minutes: 240
+
+    strategy:
+      fail-fast: false
+      matrix:
+        protocol: [MESI_Two_Level, MOESI_CMP_directory]
+
+    env:
+      E5_PROTOCOL: ${{ matrix.protocol }}
+
+    steps:
+      - name: Descargar la revisión pública de gem5 usada en E1
+        uses: actions/checkout@v4
+        with:
+          repository: gem5/gem5
+          ref: e97d8fbfbe4ff549b2c90183956f719ada856756
+          persist-credentials: false
+
+      - name: Configurar un solo protocolo y compilar
+        shell: bash
+        run: |
+          set -euo pipefail
+          build_dir=build/ARM_E5
+          selected="RUBY_PROTOCOL_${E5_PROTOCOL}"
+
+          scons defconfig "$build_dir" build_opts/ARM
+
+          # Desactivar cualquier otro protocolo que venga de ARM por defecto.
+          mapfile -t disable < <(
+              sed -nE 's/^(RUBY_PROTOCOL_[A-Za-z0-9_]+)=y$/\1=n/p' \
+                  "$build_dir/gem5.build/config" |
+              awk -v selected="$selected" '$0 != selected "=n"'
+          )
+
+          scons setconfig "$build_dir" "${disable[@]}" "${selected}=y"
+          grep -Fx "${selected}=y" "$build_dir/gem5.build/config"
+
+          scons -j2 "$build_dir/gem5.opt"
+
+      - name: Verificar el protocolo y empaquetar
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cat > verify_e5.py <<'PY'
+          import os
+          from m5.defines import buildEnv
+
+          actual = buildEnv.get("PROTOCOL")
+          expected = os.environ["E5_PROTOCOL"]
+          if actual != expected:
+              raise SystemExit(f"Protocolo esperado: {expected}; obtenido: {actual}")
+          print(f"Protocolo verificado: {actual}")
+          PY
+
+          build/ARM_E5/gem5.opt verify_e5.py
+
+          mkdir -p package
+          strip --strip-debug -o package/gem5.opt build/ARM_E5/gem5.opt
+          cp -a configs package/
+          git rev-parse HEAD > package/gem5-commit.txt
+          tar -czf "gem5-${E5_PROTOCOL}.tar.gz" -C package .
+
+      - name: Publicar el ejecutable y sus configs
+        uses: actions/upload-artifact@v4
+        with:
+          name: gem5-${{ matrix.protocol }}
+          path: gem5-${{ matrix.protocol }}.tar.gz
+          if-no-files-found: error
+          compression-level: 0
