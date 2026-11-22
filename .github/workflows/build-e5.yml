@@ -22,6 +22,7 @@ jobs:
 
     steps:
       - name: Descargar la revisión pública de gem5 usada en E1
+        id: checkout_gem5
         uses: actions/checkout@v4
         with:
           repository: gem5/gem5
@@ -69,6 +70,8 @@ jobs:
 
       - name: Verificar el protocolo y empaquetar
         shell: bash
+        env:
+          GEM5_COMMIT: ${{ steps.checkout_gem5.outputs.commit }}
         run: |
           set -euo pipefail
 
@@ -88,7 +91,7 @@ jobs:
           mkdir -p package
           strip --strip-debug -o package/gem5.opt build/ARM_E5/gem5.opt
           cp -a configs package/
-          git rev-parse HEAD > package/gem5-commit.txt
+          printf '%s\n' "${GEM5_COMMIT:?Falta el SHA de gem5}" > package/gem5-commit.txt
           tar -czf "gem5-${E5_PROTOCOL}.tar.gz" -C package .
 
       - name: Publicar el ejecutable y sus configs
